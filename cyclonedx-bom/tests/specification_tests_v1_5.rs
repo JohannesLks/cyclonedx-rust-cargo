@@ -35,6 +35,35 @@ mod v1_5 {
         xml
     }
 
+    fn pedigree_nested_components_bom(depth: usize) -> String {
+        let mut xml = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+  <components>
+"#,
+        );
+
+        for index in 0..depth {
+            xml.push_str(&format!(
+                r#"    <component type="library"><name>component-{index}</name>
+"#
+            ));
+            if index + 1 < depth {
+                xml.push_str("      <pedigree><ancestors>\n");
+            }
+        }
+
+        for index in (0..depth).rev() {
+            xml.push_str("    </component>\n");
+            if index > 0 {
+                xml.push_str("      </ancestors></pedigree>\n");
+            }
+        }
+
+        xml.push_str("  </components>\n</bom>\n");
+        xml
+    }
+
     fn lax_nested_elements_bom(depth: usize) -> String {
         let mut xml = String::from(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -201,6 +230,20 @@ mod v1_5 {
     fn it_should_reject_nested_components_beyond_the_xml_depth_limit() {
         let error = Bom::parse_from_xml_v1_5(nested_components_bom(120).as_bytes())
             .expect_err("Expected nested components beyond the depth limit to fail");
+
+        match error {
+            XmlReadError::RecursionLimitExceeded { element, limit } => {
+                assert_eq!(element, "component");
+                assert_eq!(limit, XML_RECURSION_LIMIT);
+            }
+            other => panic!("Expected recursion limit error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn it_should_reject_pedigree_nested_components_beyond_the_xml_depth_limit() {
+        let error = Bom::parse_from_xml_v1_5(pedigree_nested_components_bom(120).as_bytes())
+            .expect_err("Expected pedigree nested components beyond the depth limit to fail");
 
         match error {
             XmlReadError::RecursionLimitExceeded { element, limit } => {

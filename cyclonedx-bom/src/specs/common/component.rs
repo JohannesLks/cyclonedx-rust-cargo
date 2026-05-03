@@ -609,13 +609,13 @@ pub(crate) mod base {
                     {
                         modified = Some(read_boolean_tag(event_reader, &name)?)
                     }
-                    reader::XmlEvent::StartElement {
-                        name, attributes, ..
-                    } if name.local_name == PEDIGREE_TAG => {
-                        pedigree = Some(Pedigree::read_xml_element(
+                    reader::XmlEvent::StartElement { name, .. }
+                        if name.local_name == PEDIGREE_TAG =>
+                    {
+                        pedigree = Some(Pedigree::read_xml_element_at_depth(
                             event_reader,
                             &name,
-                            &attributes,
+                            component_depth,
                         )?)
                     }
                     reader::XmlEvent::StartElement {
@@ -1242,6 +1242,16 @@ pub(crate) mod base {
         where
             Self: Sized,
         {
+            Self::read_xml_element_at_depth(event_reader, element_name, 0)
+        }
+    }
+
+    impl Pedigree {
+        fn read_xml_element_at_depth<R: std::io::Read>(
+            event_reader: &mut xml::EventReader<R>,
+            element_name: &xml::name::OwnedName,
+            component_depth: usize,
+        ) -> Result<Self, XmlReadError> {
             let mut ancestors: Option<Components> = None;
             let mut descendants: Option<Components> = None;
             let mut variants: Option<Components> = None;
@@ -1255,31 +1265,31 @@ pub(crate) mod base {
                     .next()
                     .map_err(to_xml_read_error(PEDIGREE_TAG))?;
                 match next_element {
-                    reader::XmlEvent::StartElement {
-                        name, attributes, ..
-                    } if name.local_name == ANCESTORS_TAG => {
-                        ancestors = Some(Components::read_xml_element(
+                    reader::XmlEvent::StartElement { name, .. }
+                        if name.local_name == ANCESTORS_TAG =>
+                    {
+                        ancestors = Some(Components::read_xml_element_at_depth(
                             event_reader,
                             &name,
-                            &attributes,
+                            component_depth,
                         )?)
                     }
-                    reader::XmlEvent::StartElement {
-                        name, attributes, ..
-                    } if name.local_name == DESCENDANTS_TAG => {
-                        descendants = Some(Components::read_xml_element(
+                    reader::XmlEvent::StartElement { name, .. }
+                        if name.local_name == DESCENDANTS_TAG =>
+                    {
+                        descendants = Some(Components::read_xml_element_at_depth(
                             event_reader,
                             &name,
-                            &attributes,
+                            component_depth,
                         )?)
                     }
-                    reader::XmlEvent::StartElement {
-                        name, attributes, ..
-                    } if name.local_name == VARIANTS_TAG => {
-                        variants = Some(Components::read_xml_element(
+                    reader::XmlEvent::StartElement { name, .. }
+                        if name.local_name == VARIANTS_TAG =>
+                    {
+                        variants = Some(Components::read_xml_element_at_depth(
                             event_reader,
                             &name,
-                            &attributes,
+                            component_depth,
                         )?)
                     }
                     reader::XmlEvent::StartElement {
