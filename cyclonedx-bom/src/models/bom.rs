@@ -40,7 +40,7 @@ use crate::models::service::{Service, Services};
 use crate::models::signature::Signature;
 use crate::models::vulnerability::Vulnerabilities;
 use crate::validation::{Validate, ValidationContext, ValidationError, ValidationResult};
-use crate::xml::{FromXmlDocument, ToXml};
+use crate::xml::{read_with_options, FromXmlDocument, ToXml, XmlReadOptions};
 
 use super::vulnerability::Vulnerability;
 
@@ -123,6 +123,22 @@ pub struct Bom {
 }
 
 impl Bom {
+    fn parse_xml_document_with_options<R, B>(
+        reader: R,
+        options: XmlReadOptions,
+    ) -> Result<Self, crate::errors::XmlReadError>
+    where
+        R: std::io::Read,
+        B: FromXmlDocument + Into<Self>,
+    {
+        read_with_options(options, reader, |reader| {
+            let config = ParserConfig::default().trim_whitespace(true);
+            let mut event_reader = EventReader::new_with_config(reader, config);
+            let bom = B::read_xml_document(&mut event_reader)?;
+            Ok(bom.into())
+        })
+    }
+
     /// General function to parse a JSON file, fetches the `specVersion` field first then applies the right conversion.
     pub fn parse_from_json<R: std::io::Read>(
         mut reader: R,
@@ -179,10 +195,20 @@ impl Bom {
         reader: R,
         version: SpecVersion,
     ) -> Result<Self, crate::errors::XmlReadError> {
+        Self::parse_from_xml_with_version_and_options(reader, version, XmlReadOptions::default())
+    }
+
+    /// Parse the input as an XML document conforming to the version of the specification that you
+    /// provide, using custom XML parser read options.
+    pub fn parse_from_xml_with_version_and_options<R: std::io::Read>(
+        reader: R,
+        version: SpecVersion,
+        options: XmlReadOptions,
+    ) -> Result<Self, crate::errors::XmlReadError> {
         match version {
-            SpecVersion::V1_3 => Self::parse_from_xml_v1_3(reader),
-            SpecVersion::V1_4 => Self::parse_from_xml_v1_4(reader),
-            SpecVersion::V1_5 => Self::parse_from_xml_v1_5(reader),
+            SpecVersion::V1_3 => Self::parse_from_xml_v1_3_with_options(reader, options),
+            SpecVersion::V1_4 => Self::parse_from_xml_v1_4_with_options(reader, options),
+            SpecVersion::V1_5 => Self::parse_from_xml_v1_5_with_options(reader, options),
         }
     }
 
@@ -218,10 +244,16 @@ impl Bom {
     pub fn parse_from_xml_v1_3<R: std::io::Read>(
         reader: R,
     ) -> Result<Self, crate::errors::XmlReadError> {
-        let config = ParserConfig::default().trim_whitespace(true);
-        let mut event_reader = EventReader::new_with_config(reader, config);
-        let bom = crate::specs::v1_3::bom::Bom::read_xml_document(&mut event_reader)?;
-        Ok(bom.into())
+        Self::parse_from_xml_v1_3_with_options(reader, XmlReadOptions::default())
+    }
+
+    /// Parse the input as an XML document conforming to [version 1.3 of the specification](https://cyclonedx.org/docs/1.3/xml/)
+    /// using custom XML parser read options.
+    pub fn parse_from_xml_v1_3_with_options<R: std::io::Read>(
+        reader: R,
+        options: XmlReadOptions,
+    ) -> Result<Self, crate::errors::XmlReadError> {
+        Self::parse_xml_document_with_options::<R, crate::specs::v1_3::bom::Bom>(reader, options)
     }
 
     /// Output as a JSON document conforming to [version 1.3 of the specification](https://cyclonedx.org/docs/1.3/json/)
@@ -265,10 +297,16 @@ impl Bom {
     pub fn parse_from_xml_v1_4<R: std::io::Read>(
         reader: R,
     ) -> Result<Self, crate::errors::XmlReadError> {
-        let config = ParserConfig::default().trim_whitespace(true);
-        let mut event_reader = EventReader::new_with_config(reader, config);
-        let bom = crate::specs::v1_4::bom::Bom::read_xml_document(&mut event_reader)?;
-        Ok(bom.into())
+        Self::parse_from_xml_v1_4_with_options(reader, XmlReadOptions::default())
+    }
+
+    /// Parse the input as an XML document conforming to [version 1.4 of the specification](https://cyclonedx.org/docs/1.4/xml/)
+    /// using custom XML parser read options.
+    pub fn parse_from_xml_v1_4_with_options<R: std::io::Read>(
+        reader: R,
+        options: XmlReadOptions,
+    ) -> Result<Self, crate::errors::XmlReadError> {
+        Self::parse_xml_document_with_options::<R, crate::specs::v1_4::bom::Bom>(reader, options)
     }
 
     /// Output as a JSON document conforming to [version 1.4 of the specification](https://cyclonedx.org/docs/1.4/json/)
@@ -305,10 +343,16 @@ impl Bom {
     pub fn parse_from_xml_v1_5<R: std::io::Read>(
         reader: R,
     ) -> Result<Self, crate::errors::XmlReadError> {
-        let config = ParserConfig::default().trim_whitespace(true);
-        let mut event_reader = EventReader::new_with_config(reader, config);
-        let bom = crate::specs::v1_5::bom::Bom::read_xml_document(&mut event_reader)?;
-        Ok(bom.into())
+        Self::parse_from_xml_v1_5_with_options(reader, XmlReadOptions::default())
+    }
+
+    /// Parse the input as an XML document conforming to [version 1.5 of the specification](https://cyclonedx.org/docs/1.5/xml/)
+    /// using custom XML parser read options.
+    pub fn parse_from_xml_v1_5_with_options<R: std::io::Read>(
+        reader: R,
+        options: XmlReadOptions,
+    ) -> Result<Self, crate::errors::XmlReadError> {
+        Self::parse_xml_document_with_options::<R, crate::specs::v1_5::bom::Bom>(reader, options)
     }
 
     /// Output as a JSON document conforming to [version 1.5 of the specification](https://cyclonedx.org/docs/1.5/json/)

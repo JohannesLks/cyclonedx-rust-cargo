@@ -128,6 +128,8 @@ pub mod models;
 pub mod prelude;
 pub mod validation;
 
+pub use crate::xml::{XmlReadOptions, DEFAULT_XML_MAX_DEPTH};
+
 mod specs;
 mod utilities;
 mod xml;

@@ -127,6 +127,9 @@ pub enum XmlReadError {
         expected_namespace: String,
         actual_namespace: Option<String>,
     },
+
+    #[error("Exceeded XML recursion limit of {limit} while reading {element}")]
+    RecursionLimitExceeded { element: String, limit: usize },
 }
 
 impl XmlReadError {

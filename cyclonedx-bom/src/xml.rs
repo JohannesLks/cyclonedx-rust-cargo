@@ -1,13 +1,83 @@
 use crate::errors::{XmlReadError, XmlWriteError};
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use xml::{
     attribute::OwnedAttribute,
     name::OwnedName,
     namespace::{Namespace, NS_NO_PREFIX},
     reader::{self},
     writer::{self, EventWriter, XmlEvent},
-    EventReader,
+    EventReader, ParserConfig,
 };
+
+pub const DEFAULT_XML_MAX_DEPTH: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct XmlReadOptions {
+    pub max_depth: Option<usize>,
+}
+
+impl XmlReadOptions {
+    pub fn with_max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = Some(max_depth);
+        self
+    }
+
+    pub fn without_max_depth_limit(mut self) -> Self {
+        self.max_depth = None;
+        self
+    }
+}
+
+impl Default for XmlReadOptions {
+    fn default() -> Self {
+        Self {
+            max_depth: Some(DEFAULT_XML_MAX_DEPTH),
+        }
+    }
+}
+
+pub(crate) fn read_with_options<R: Read, T>(
+    options: XmlReadOptions,
+    mut reader: R,
+    read: impl FnOnce(Cursor<Vec<u8>>) -> Result<T, XmlReadError>,
+) -> Result<T, XmlReadError> {
+    let mut input = Vec::new();
+    reader
+        .read_to_end(&mut input)
+        .map_err(xml::reader::Error::from)
+        .map_err(to_xml_read_error("document"))?;
+
+    if let Some(max_depth) = options.max_depth {
+        check_xml_depth(Cursor::new(input.as_slice()), max_depth)?;
+    }
+
+    read(Cursor::new(input))
+}
+
+fn check_xml_depth<R: Read>(reader: R, max_depth: usize) -> Result<(), XmlReadError> {
+    let mut depth = 0usize;
+    let config = ParserConfig::default().trim_whitespace(true);
+    let event_reader = EventReader::new_with_config(reader, config);
+
+    for event in event_reader {
+        match event.map_err(to_xml_read_error("document"))? {
+            reader::XmlEvent::StartElement { name, .. } => {
+                depth += 1;
+                if depth > max_depth {
+                    return Err(XmlReadError::RecursionLimitExceeded {
+                        element: name.local_name,
+                        limit: max_depth,
+                    });
+                }
+            }
+            reader::XmlEvent::EndElement { .. } => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
 
 pub(crate) trait ToXml {
     fn write_xml_element<W: Write>(&self, writer: &mut EventWriter<W>)

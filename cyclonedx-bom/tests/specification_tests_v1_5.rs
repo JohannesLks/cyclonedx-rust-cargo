@@ -1,7 +1,68 @@
 mod v1_5 {
+    use cyclonedx_bom::errors::XmlReadError;
     use cyclonedx_bom::models::bom::{Bom, SpecVersion};
     use cyclonedx_bom::validation::Validate;
+    use cyclonedx_bom::{XmlReadOptions, DEFAULT_XML_MAX_DEPTH};
     use test_utils::validate_json_with_schema;
+
+    fn nested_components_bom(depth: usize) -> String {
+        let mut xml = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+  <components>
+"#,
+        );
+
+        for index in 0..depth {
+            xml.push_str(&format!(
+                r#"    <component type="library"><name>component-{index}</name>
+"#
+            ));
+            if index + 1 < depth {
+                xml.push_str("      <components>\n");
+            }
+        }
+
+        for index in 0..depth {
+            if index > 0 {
+                xml.push_str("      </components>\n");
+            }
+            xml.push_str("    </component>\n");
+        }
+
+        xml.push_str("  </components>\n</bom>\n");
+        xml
+    }
+
+    fn lax_nested_elements_bom(depth: usize) -> String {
+        let mut xml = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+  <components>
+"#,
+        );
+
+        for index in 0..depth {
+            xml.push_str(&format!("    <unknown{index}>\n"));
+        }
+
+        for index in (0..depth).rev() {
+            xml.push_str(&format!("    </unknown{index}>\n"));
+        }
+
+        xml.push_str("  </components>\n</bom>\n");
+        xml
+    }
+
+    fn utf16le_with_bom(xml: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xfe];
+
+        for code_unit in xml.encode_utf16() {
+            bytes.extend_from_slice(&code_unit.to_le_bytes());
+        }
+
+        bytes
+    }
 
     #[test]
     fn it_should_parse_all_of_the_valid_xml_specifications() {
@@ -99,5 +160,90 @@ mod v1_5 {
                 }
             });
         });
+    }
+
+    #[test]
+    fn it_should_parse_nested_components_within_the_xml_depth_limit() {
+        let max_component_depth = (DEFAULT_XML_MAX_DEPTH - 1) / 2;
+        let bom = Bom::parse_from_xml_v1_5(nested_components_bom(max_component_depth).as_bytes())
+            .expect("Expected nested components within the depth limit to parse");
+
+        assert_eq!(bom.components.expect("Expected components").0.len(), 1);
+    }
+
+    #[test]
+    fn it_should_reject_nested_components_beyond_the_xml_depth_limit() {
+        let error = Bom::parse_from_xml_v1_5(nested_components_bom(120).as_bytes())
+            .expect_err("Expected nested components beyond the depth limit to fail");
+
+        match error {
+            XmlReadError::RecursionLimitExceeded { element, limit } => {
+                assert_eq!(element, "component");
+                assert_eq!(limit, DEFAULT_XML_MAX_DEPTH);
+            }
+            other => panic!("Expected recursion limit error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn it_should_parse_nested_components_with_custom_xml_depth_limit() {
+        let component_depth = (DEFAULT_XML_MAX_DEPTH + 1) / 2;
+        let max_depth = (component_depth * 2) + 2;
+        let bom = Bom::parse_from_xml_v1_5_with_options(
+            nested_components_bom(component_depth).as_bytes(),
+            XmlReadOptions::default().with_max_depth(max_depth),
+        )
+        .expect("Expected custom XML depth limit to parse");
+
+        assert_eq!(bom.components.expect("Expected components").0.len(), 1);
+    }
+
+    #[test]
+    fn it_should_disable_xml_depth_limit_when_requested() {
+        let bom = Bom::parse_from_xml_v1_5_with_options(
+            nested_components_bom(DEFAULT_XML_MAX_DEPTH + 2).as_bytes(),
+            XmlReadOptions::default().without_max_depth_limit(),
+        )
+        .expect("Expected disabled XML depth limit to parse");
+
+        assert_eq!(bom.components.expect("Expected components").0.len(), 1);
+    }
+
+    #[test]
+    fn it_should_reset_xml_depth_after_rejection() {
+        let _ = Bom::parse_from_xml_v1_5(nested_components_bom(120).as_bytes())
+            .expect_err("Expected nested components beyond the depth limit to fail");
+
+        Bom::parse_from_xml_v1_5(nested_components_bom(1).as_bytes())
+            .expect("Expected later parse to start with a fresh depth counter");
+    }
+
+    #[test]
+    fn it_should_reject_lax_validation_elements_beyond_the_xml_depth_limit() {
+        let error = Bom::parse_from_xml_v1_5(lax_nested_elements_bom(120).as_bytes())
+            .expect_err("Expected lax nested elements beyond the depth limit to fail");
+
+        match error {
+            XmlReadError::RecursionLimitExceeded { limit, .. } => {
+                assert_eq!(limit, DEFAULT_XML_MAX_DEPTH);
+            }
+            other => panic!("Expected recursion limit error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn it_should_reject_utf16_xml_beyond_the_xml_depth_limit() {
+        let xml = utf16le_with_bom(
+            &nested_components_bom(120).replace("encoding=\"UTF-8\"", "encoding=\"UTF-16\""),
+        );
+        let error = Bom::parse_from_xml_v1_5(xml.as_slice())
+            .expect_err("Expected UTF-16 XML beyond the depth limit to fail");
+
+        match error {
+            XmlReadError::RecursionLimitExceeded { limit, .. } => {
+                assert_eq!(limit, DEFAULT_XML_MAX_DEPTH);
+            }
+            other => panic!("Expected recursion limit error, got {other:?}"),
+        }
     }
 }
