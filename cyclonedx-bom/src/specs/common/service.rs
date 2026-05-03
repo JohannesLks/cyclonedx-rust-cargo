@@ -31,10 +31,10 @@ pub(crate) mod base {
         models,
         utilities::{convert_optional, convert_vec},
         xml::{
-            attribute_or_error, optional_attribute, read_boolean_tag, read_lax_validation_list_tag,
-            read_lax_validation_tag, read_list_tag, read_simple_tag, to_xml_read_error,
-            to_xml_write_error, unexpected_element_error, write_close_tag, write_simple_tag,
-            write_start_tag, FromXml, ToInnerXml, ToXml,
+            attribute_or_error, optional_attribute, read_boolean_tag, read_lax_validation_tag,
+            read_list_tag, read_simple_tag, to_xml_read_error, to_xml_write_error,
+            unexpected_element_error, write_close_tag, write_simple_tag, write_start_tag,
+            xml_recursion_limit_exceeded, FromXml, ToInnerXml, ToXml, DEFAULT_XML_RECURSION_LIMIT,
         },
     };
     use serde::{Deserialize, Serialize};
@@ -106,7 +106,45 @@ pub(crate) mod base {
         where
             Self: Sized,
         {
-            read_lax_validation_list_tag(event_reader, element_name, SERVICE_TAG).map(Services)
+            Self::read_xml_element_at_depth(event_reader, element_name, 0)
+        }
+    }
+
+    impl Services {
+        fn read_xml_element_at_depth<R: std::io::Read>(
+            event_reader: &mut xml::EventReader<R>,
+            element_name: &xml::name::OwnedName,
+            service_depth: usize,
+        ) -> Result<Self, XmlReadError> {
+            let mut services = Vec::new();
+
+            let mut got_end_tag = false;
+            while !got_end_tag {
+                let next_element = event_reader
+                    .next()
+                    .map_err(to_xml_read_error(&element_name.local_name))?;
+                match next_element {
+                    reader::XmlEvent::StartElement {
+                        name, attributes, ..
+                    } if name.local_name == SERVICE_TAG => {
+                        services.push(Service::read_xml_element_at_depth(
+                            event_reader,
+                            &name,
+                            &attributes,
+                            service_depth + 1,
+                        )?);
+                    }
+                    reader::XmlEvent::StartElement { name, .. } => {
+                        read_lax_validation_tag(event_reader, &name)?
+                    }
+                    reader::XmlEvent::EndElement { name } if &name == element_name => {
+                        got_end_tag = true;
+                    }
+                    unexpected => return Err(unexpected_element_error(element_name, unexpected)),
+                }
+            }
+
+            Ok(Self(services))
         }
     }
 
@@ -362,6 +400,21 @@ pub(crate) mod base {
         where
             Self: Sized,
         {
+            Self::read_xml_element_at_depth(event_reader, element_name, attributes, 1)
+        }
+    }
+
+    impl Service {
+        fn read_xml_element_at_depth<R: std::io::Read>(
+            event_reader: &mut xml::EventReader<R>,
+            element_name: &xml::name::OwnedName,
+            attributes: &[xml::attribute::OwnedAttribute],
+            service_depth: usize,
+        ) -> Result<Self, XmlReadError> {
+            if service_depth > DEFAULT_XML_RECURSION_LIMIT {
+                return Err(xml_recursion_limit_exceeded(SERVICE_TAG));
+            }
+
             let bom_ref = optional_attribute(attributes, BOM_REF_ATTR);
 
             let mut provider: Option<OrganizationalEntity> = None;
@@ -472,13 +525,13 @@ pub(crate) mod base {
                         )?)
                     }
 
-                    reader::XmlEvent::StartElement {
-                        name, attributes, ..
-                    } if name.local_name == SERVICES_TAG => {
-                        services = Some(Services::read_xml_element(
+                    reader::XmlEvent::StartElement { name, .. }
+                        if name.local_name == SERVICES_TAG =>
+                    {
+                        services = Some(Services::read_xml_element_at_depth(
                             event_reader,
                             &name,
-                            &attributes,
+                            service_depth,
                         )?)
                     }
                     #[versioned("1.4", "1.5")]

@@ -1,7 +1,23 @@
 mod v1_3 {
+    use cyclonedx_bom::errors::XmlReadError;
     use cyclonedx_bom::models::bom::{Bom, SpecVersion};
     use cyclonedx_bom::validation::Validate;
     use test_utils::validate_json_with_schema;
+
+    const XML_RECURSION_LIMIT: usize = 32;
+
+    fn deeply_nested_bom(namespace: &str, depth: usize) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="{namespace}" version="1">
+{open}
+{close}
+</bom>
+"#,
+            open = "<unknown>".repeat(depth),
+            close = "</unknown>".repeat(depth),
+        )
+    }
 
     #[test]
     fn it_should_parse_all_of_the_valid_xml_specifications() {
@@ -96,5 +112,20 @@ mod v1_3 {
                 }
             });
         });
+    }
+
+    #[test]
+    fn it_should_reject_xml_beyond_the_depth_limit() {
+        let error = Bom::parse_from_xml_v1_3(
+            deeply_nested_bom("http://cyclonedx.org/schema/bom/1.3", 120).as_bytes(),
+        )
+        .expect_err("Expected nested XML beyond the depth limit to fail");
+
+        match error {
+            XmlReadError::RecursionLimitExceeded { limit, .. } => {
+                assert_eq!(limit, XML_RECURSION_LIMIT);
+            }
+            other => panic!("Expected recursion limit error, got {other:?}"),
+        }
     }
 }

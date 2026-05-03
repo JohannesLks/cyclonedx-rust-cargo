@@ -9,6 +9,15 @@ use xml::{
     EventReader,
 };
 
+pub(crate) const DEFAULT_XML_RECURSION_LIMIT: usize = 32;
+
+pub(crate) fn xml_recursion_limit_exceeded(element: impl ToString) -> XmlReadError {
+    XmlReadError::RecursionLimitExceeded {
+        element: element.to_string(),
+        limit: DEFAULT_XML_RECURSION_LIMIT,
+    }
+}
+
 pub(crate) trait ToXml {
     fn write_xml_element<W: Write>(&self, writer: &mut EventWriter<W>)
         -> Result<(), XmlWriteError>;
@@ -648,23 +657,47 @@ pub(crate) fn read_lax_validation_tag<R: Read>(
     event_reader: &mut EventReader<R>,
     element: &OwnedName,
 ) -> Result<(), XmlReadError> {
-    let mut got_end_tag = false;
-    while !got_end_tag {
+    let mut depth = 1usize;
+    let mut elements = vec![element.clone()];
+
+    while depth > 0 {
+        if depth > DEFAULT_XML_RECURSION_LIMIT {
+            return Err(xml_recursion_limit_exceeded(
+                elements
+                    .last()
+                    .map(|name| name.local_name.as_str())
+                    .unwrap_or(&element.local_name),
+            ));
+        }
+
         let next_element = event_reader
             .next()
             .map_err(to_xml_read_error(&element.local_name))?;
 
         match next_element {
             reader::XmlEvent::StartElement { name, .. } => {
-                read_lax_validation_tag(event_reader, &name)?
+                depth += 1;
+                elements.push(name);
             }
-            reader::XmlEvent::EndElement { name } if &name == element => {
-                got_end_tag = true;
+            reader::XmlEvent::EndElement { name } => {
+                let expected = elements.last().ok_or_else(|| {
+                    unexpected_element_error(
+                        element,
+                        reader::XmlEvent::EndElement { name: name.clone() },
+                    )
+                })?;
+
+                if &name == expected {
+                    depth -= 1;
+                    elements.pop();
+                } else {
+                    return Err(unexpected_element_error(
+                        expected,
+                        reader::XmlEvent::EndElement { name },
+                    ));
+                }
             }
             unexpected @ reader::XmlEvent::EndDocument => {
-                return Err(unexpected_element_error(element, unexpected))
-            }
-            unexpected @ reader::XmlEvent::EndElement { .. } => {
                 return Err(unexpected_element_error(element, unexpected))
             }
             _unknown => (),

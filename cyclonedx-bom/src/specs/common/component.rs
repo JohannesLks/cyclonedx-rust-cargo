@@ -54,10 +54,11 @@ pub(crate) mod base {
         },
         utilities::{convert_optional, convert_vec, try_convert_optional, try_convert_vec},
         xml::{
-            attribute_or_error, optional_attribute, read_boolean_tag, read_lax_validation_list_tag,
-            read_lax_validation_tag, read_list_tag, read_simple_tag, to_xml_read_error,
-            to_xml_write_error, unexpected_element_error, write_close_tag, write_simple_tag,
-            write_start_tag, FromXml, FromXmlType, ToInnerXml, ToXml,
+            attribute_or_error, optional_attribute, read_boolean_tag, read_lax_validation_tag,
+            read_list_tag, read_simple_tag, to_xml_read_error, to_xml_write_error,
+            unexpected_element_error, write_close_tag, write_simple_tag, write_start_tag,
+            xml_recursion_limit_exceeded, FromXml, FromXmlType, ToInnerXml, ToXml,
+            DEFAULT_XML_RECURSION_LIMIT,
         },
     };
     use serde::{Deserialize, Serialize};
@@ -119,7 +120,45 @@ pub(crate) mod base {
         where
             Self: Sized,
         {
-            read_lax_validation_list_tag(event_reader, element_name, COMPONENT_TAG).map(Components)
+            Self::read_xml_element_at_depth(event_reader, element_name, 0)
+        }
+    }
+
+    impl Components {
+        fn read_xml_element_at_depth<R: std::io::Read>(
+            event_reader: &mut xml::EventReader<R>,
+            element_name: &xml::name::OwnedName,
+            component_depth: usize,
+        ) -> Result<Self, crate::errors::XmlReadError> {
+            let mut components = Vec::new();
+
+            let mut got_end_tag = false;
+            while !got_end_tag {
+                let next_element = event_reader
+                    .next()
+                    .map_err(to_xml_read_error(&element_name.local_name))?;
+                match next_element {
+                    reader::XmlEvent::StartElement {
+                        name, attributes, ..
+                    } if name.local_name == COMPONENT_TAG => {
+                        components.push(Component::read_xml_element_at_depth(
+                            event_reader,
+                            &name,
+                            &attributes,
+                            component_depth + 1,
+                        )?);
+                    }
+                    reader::XmlEvent::StartElement { name, .. } => {
+                        read_lax_validation_tag(event_reader, &name)?
+                    }
+                    reader::XmlEvent::EndElement { name } if &name == element_name => {
+                        got_end_tag = true;
+                    }
+                    unexpected => return Err(unexpected_element_error(element_name, unexpected)),
+                }
+            }
+
+            Ok(Self(components))
         }
     }
 
@@ -443,6 +482,21 @@ pub(crate) mod base {
         where
             Self: Sized,
         {
+            Self::read_xml_element_at_depth(event_reader, element_name, attributes, 1)
+        }
+    }
+
+    impl Component {
+        fn read_xml_element_at_depth<R: std::io::Read>(
+            event_reader: &mut xml::EventReader<R>,
+            element_name: &xml::name::OwnedName,
+            attributes: &[xml::attribute::OwnedAttribute],
+            component_depth: usize,
+        ) -> Result<Self, crate::errors::XmlReadError> {
+            if component_depth > DEFAULT_XML_RECURSION_LIMIT {
+                return Err(xml_recursion_limit_exceeded(COMPONENT_TAG));
+            }
+
             let component_type = attribute_or_error(element_name, attributes, TYPE_ATTR)?;
             let mime_type = optional_attribute(attributes, MIME_TYPE_ATTR).map(MimeType);
             let bom_ref = optional_attribute(attributes, BOM_REF_ATTR);
@@ -582,13 +636,13 @@ pub(crate) mod base {
                             &attributes,
                         )?)
                     }
-                    reader::XmlEvent::StartElement {
-                        name, attributes, ..
-                    } if name.local_name == COMPONENTS_TAG => {
-                        components = Some(Components::read_xml_element(
+                    reader::XmlEvent::StartElement { name, .. }
+                        if name.local_name == COMPONENTS_TAG =>
+                    {
+                        components = Some(Components::read_xml_element_at_depth(
                             event_reader,
                             &name,
-                            &attributes,
+                            component_depth,
                         )?)
                     }
                     reader::XmlEvent::StartElement {
